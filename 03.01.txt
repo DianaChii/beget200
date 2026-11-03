@@ -1,0 +1,437 @@
+
+## Практика 2. Управление контейнерами
+
+**Задание 1. Жизненный цикл.**
+```bash
+docker run -it --name c1 alpine sh        # Ctrl+P,Ctrl+Q — выход без остановки
+docker attach c1                          # выход = остановка
+docker start c1 && docker exec -it c1 sh  # выход не останавливает
+docker create --name c2 alpine echo hi
+docker start c2 && docker logs c2 && docker stop c2 && docker rm c2
+```
+
+**Задание 2. Логи.**
+```bash
+docker run -d --name web1 -p 8080:80 nginx:alpine
+for i in $(seq 10); do curl -s localhost:8080 >/dev/null; done
+docker logs --tail 5 -t web1
+docker logs -f web1
+```
+Ограничение логов — `/etc/docker/daemon.json`: `{"log-driver":"json-file","log-opts":{"max-size":"10m","max-file":"3"}}`, затем `systemctl restart docker`.
+
+**Задание 3. Ресурсы.**
+```bash
+docker run -d --name lim --cpus="0.5" -m 128m nginx:alpine
+docker stats --no-stream
+docker inspect lim --format='{{.HostConfig.Memory}} {{.HostConfig.NanoCpus}}'
+```
+
+**Задание 4. Restart-политики.**
+```bash
+docker run -d --name f --restart on-failure:3 alpine sh -c "sleep 5; exit 1"
+docker inspect f --format='{{.RestartCount}}'
+docker run -d --name a --restart always nginx:alpine
+docker kill a && sleep 3 && docker ps --filter name=a
+```
+
+**Задание 5. Очистка.**
+```bash
+docker stop $(docker ps -q)
+docker container prune -f && docker image prune -f
+docker system df && docker system prune -a --volumes -f && docker system df
+```
+
+**Задание 6. Диагностика.**
+```bash
+docker run -d --name b alpine sh -c "sleep 2; exit 127"
+docker logs b
+docker inspect b --format='{{.State.ExitCode}} {{.State.Error}}'
+```
+
+
+## Практика 3. Создание образов
+
+**Задание 1. Приложение.** В `/opt/webapp/site`: `index.html`, `about.html`, `style.css`, `app.js`.
+
+**Задание 2. Dockerfile.**
+```dockerfile
+FROM nginx:alpine
+LABEL maintainer="student@example.com"
+COPY ./site /usr/share/nginx/html
+EXPOSE 80
+HEALTHCHECK CMD wget -qO- http://localhost/ || exit 1
+```
+```bash
+docker build -t webapp:1.0 .
+docker run -d --name w1 -p 8080:80 webapp:1.0
+curl localhost:8080
+docker inspect w1 --format='{{.State.Health.Status}}'
+```
+
+**Задание 3. .dockerignore + кэш.** Файл `.dockerignore`: `.git`, `*.log`, `README.md`. Пересобрать, сравнить `docker history webapp:1.0`.
+
+**Задание 4. Multi-stage (Node.js).**
+```dockerfile
+FROM node:18-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm install --production
+COPY . .
+FROM node:18-alpine
+WORKDIR /app
+COPY --from=builder /app .
+CMD ["node","server.js"]
+```
+```bash
+docker build -t nodeapp:multi . && docker run -d -p 3000:3000 nodeapp:multi
+```
+
+**Задание 5. ARG/ENV/ENTRYPOINT.**
+```dockerfile
+ARG BUILD_VERSION=dev
+ENV APP_VERSION=$BUILD_VERSION
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["node","server.js"]
+```
+`entrypoint.sh`: `echo "ver=$APP_VERSION"; exec "$@"`
+```bash
+docker build --build-arg BUILD_VERSION=2.5 -t nodeapp:2.5 .
+docker run --rm -e APP_MODE=prod nodeapp:2.5 env | grep APP
+```
+
+**Задание 6. Теги и локальный реестр.**
+```bash
+docker tag webapp:1.0 webapp:latest
+docker run -d -p 5000:5000 --name registry registry:2
+# добавить "insecure-registries":["localhost:5000"] в daemon.json, restart docker
+docker tag webapp:1.0 localhost:5000/webapp:1.0
+docker push localhost:5000/webapp:1.0
+docker rmi localhost:5000/webapp:1.0 && docker pull localhost:5000/webapp:1.0
+docker save webapp:1.0 -o w.tar && docker load -i w.tar
+```
+
+**Задание 7. Анализ.** `docker history webapp:1.0`, `docker image inspect`. Способы уменьшения: alpine-база, multi-stage, чистка кэша, .dockerignore, без dev-зависимостей.
+
+
+## Практика 4. docker-compose
+
+**Задание 1. nginx + webapp.**
+```yaml
+services:
+  web: { image: webapp:1.0, expose: ["80"] }
+  proxy:
+    image: nginx:alpine
+    ports: ["80:80"]
+    volumes: ["./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro"]
+    depends_on: [web]
+```
+`default.conf`: `location / { proxy_pass http://web:80; }`
+```bash
+docker compose up -d && curl localhost
+```
+
+**Задание 2. web + PostgreSQL + Redis + nginx.** Приложение на Node.js с `pg` и `redis`. Compose:
+```yaml
+services:
+  app:
+    build: ./app
+    environment: {DB_HOST: db, REDIS_HOST: cache, DB_PASSWORD: ${DB_PASSWORD}}
+    depends_on:
+      db: {condition: service_healthy}
+  db:
+    image: postgres:15-alpine
+    environment: {POSTGRES_PASSWORD: ${DB_PASSWORD}, POSTGRES_USER: app, POSTGRES_DB: appdb}
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL","pg_isready -U app"]
+      interval: 5s
+  cache: { image: redis:7-alpine, volumes: [redisdata:/data] }
+  web:
+    image: nginx:alpine
+    ports: ["8080:80"]
+    volumes: ["./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro"]
+volumes: { pgdata: {}, redisdata: {} }
+```
+```bash
+echo "DB_PASSWORD=Secret123" > .env
+docker compose up -d --build && curl localhost:8080
+```
+
+**Задание 3. .env.** `docker compose config` — проверка подстановки. `docker compose --env-file .env.prod config`.
+
+**Задание 4. Override + профили.** `docker-compose.override.yml` — dev-режим (volume кода). В `docker-compose.tools.yml` сервис `adminer` с `profiles: [tools]`.
+```bash
+docker compose up -d                     # без adminer
+docker compose --profile tools up -d     # с adminer
+```
+
+**Задание 5. Масштабирование.**
+```bash
+docker compose up -d --scale app=3
+for i in $(seq 10); do curl -s localhost:8080 | grep host; done
+```
+
+**Задание 6. Жизненный цикл.**
+```bash
+docker compose ps / top / logs -f app
+docker compose restart app
+docker compose up -d --force-recreate
+docker compose down       # тома сохраняются
+docker compose down -v    # тома удаляются
+```
+
+**Задание 7. Отладка.** `docker compose config`, проверить конфликт портов, циклические depends_on, `docker compose ps` (healthy/unhealthy).
+
+## Практика 5. Порты и монтирования
+
+**Задание 1. Порты.**
+```bash
+docker run -d --name p1 -p 8080:80 nginx:alpine
+docker run -d --name p3 -p 127.0.0.1:8082:80 nginx:alpine
+docker run -d --name p4 -p 9000-9010:80 nginx:alpine
+docker run -d --name p5 -P nginx:alpine && docker port p5
+ss -tlnp | grep -E '8080|8082|900'
+```
+
+**Задание 2. Bind mounts.**
+```bash
+docker run -d --name b1 -p 8080:80 -v /opt/site:/usr/share/nginx/html:ro nginx:alpine
+echo "<h1>new</h1>" > /opt/site/index.html   # сразу видно
+docker run -d -v /opt/nginx.conf:/etc/nginx/conf.d/default.conf:ro nginx:alpine
+docker run -d -v /opt/logs:/var/log/nginx nginx:alpine
+docker inspect b1 --format='{{json .Mounts}}'
+```
+
+**Задание 3. Named volumes.**
+```bash
+docker volume create appdata
+docker run -d --name v1 -v appdata:/data alpine sh -c "sleep 3600"
+docker exec v1 sh -c "echo hi > /data/f"
+docker rm -f v1
+docker run --rm -v appdata:/data alpine cat /data/f
+docker volume inspect appdata
+```
+
+**Задание 4. UID/GID.**
+```bash
+chmod 700 /opt/protected       # Permission denied у nginx
+chmod 755 /opt/protected       # исправление
+docker run --rm --user 1000:1000 alpine id
+```
+
+**Задание 5. tmpfs.**
+```bash
+docker run -d --name t --tmpfs /tmp:rw,size=64m nginx:alpine
+docker exec t sh -c "echo x > /tmp/f && cat /tmp/f"
+docker rm -f t                 # данные /tmp исчезли
+```
+В compose:
+```yaml
+volumes: ["./site:/usr/share/nginx/html:ro"]
+tmpfs: ["/tmp:size=64m"]
+```
+
+**Задание 6. Комплексный веб-сервис с HTTPS.**
+```bash
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout /opt/practice5/key.pem -out /opt/practice5/cert.pem \
+  -subj "/CN=localhost"
+```
+В compose: bind статики (`:ro`), named volume для загрузок, bind логов, tmpfs для `/tmp`, порт `8443:443`, конфиг nginx с `ssl_certificate`.
+```bash
+curl -k https://localhost:8443
+```
+
+**Задание 7. Диагностика монтирований.**
+```bash
+# -v создаёт путь автоматически
+docker run --rm -v /no/such/dir:/data alpine ls /data
+# --mount требует существования
+docker run --rm --mount type=bind,src=/no/such/dir,dst=/data alpine ls /data
+docker inspect b1 --format='{{json .Mounts}}'
+```
+
+**Задание 8. Сравнение драйверов логирования через volume.**
+```bash
+docker run -d --name logtest -v /opt/logs:/var/log/nginx nginx:alpine
+curl -s localhost:8080 >/dev/null
+ls -l /opt/logs/
+```
+
+**Задание 9. Volume из другого контейнера (`--volumes-from`).**
+```bash
+docker run -d --name src -v appdata:/data alpine sh -c "echo shared > /data/s && sleep 3600"
+docker run --rm --volumes-from src alpine cat /data/s
+```
+
+**Задание 10. Ограничение доступа через read-only rootfs.**
+```bash
+docker run -d --name ro --read-only --tmpfs /var/cache/nginx --tmpfs /var/run \
+  -p 8086:80 nginx:alpine
+curl localhost:8086
+docker exec ro sh -c "touch /test" || echo "rootfs только для чтения"
+```
+
+
+## Практика 6. Оркестрация (расширенная)
+
+### Вариант A. Docker Swarm
+
+**Задание 1. Кластер.**
+```bash
+docker swarm init --advertise-addr <IP>
+docker swarm join-token worker            # для второй ноды
+docker node ls
+docker info | grep Swarm
+```
+
+**Задание 2. Сервис.**
+```bash
+docker service create --name web --replicas 3 -p 8080:80 nginx:alpine
+docker service ls && docker service ps web
+docker service inspect web --pretty
+```
+
+**Задание 3. Масштабирование и self-healing.**
+```bash
+docker service scale web=5
+docker kill <container>                    # Swarm поднимет новый
+docker service ps web
+```
+
+**Задание 4. Rolling update и rollback.**
+```bash
+docker service update --image nginx:1.25-alpine \
+  --update-parallelism 1 --update-delay 10s web
+docker service rollback web
+```
+
+**Задание 5. Секреты и конфиги.**
+```bash
+echo "secret" | docker secret create db_pass -
+docker config create nginx_conf ./nginx.conf
+docker service create --name s --secret db_pass \
+  --config source=nginx_conf,target=/etc/nginx/conf.d/default.conf \
+  -p 8081:80 nginx:alpine
+docker exec <container> cat /run/secrets/db_pass
+```
+
+**Задание 6. Overlay-сеть.**
+```bash
+docker network create --driver overlay appnet
+docker service create --name a1 --network appnet nginx:alpine
+docker service create --name a2 --network appnet alpine sleep 3600
+docker exec <a2> ping -c2 a1
+```
+
+**Задание 7. Стек.**
+```bash
+docker stack deploy -c docker-compose.yml mystack
+docker stack services mystack
+docker stack ps mystack
+docker stack rm mystack
+```
+
+**Задание 8. Ограничение ресурсов и placement.**
+```bash
+docker service create --name lim --replicas 2 --limit-cpu 0.5 --limit-memory 128M \
+  --constraint 'node.role==manager' nginx:alpine
+docker service ps lim
+```
+
+**Задание 9. Healthcheck и откат при сбое.**
+```bash
+docker service update --health-cmd "curl -f http://localhost/ || exit 1" \
+  --health-interval 5s --health-retries 3 web
+```
+
+**Задание 10. Выход из кластера.**
+```bash
+docker service rm web s lim a1 a2
+docker swarm leave --force
+```
+
+### Вариант B. k3s
+
+**Задание 1. Установка.**
+```bash
+curl -sfL https://get.k3s.io | sh -
+systemctl status k3s
+kubectl get nodes && kubectl get pods -A
+```
+
+**Задание 2. Pod и Deployment.**
+```bash
+kubectl run nginx --image=nginx:alpine
+kubectl get pods && kubectl describe pod nginx && kubectl logs nginx
+kubectl create deployment web --image=nginx:alpine --replicas=3
+kubectl expose deployment web --port=80 --type=NodePort
+kubectl get svc web
+curl http://<IP>:<NodePort>
+```
+
+**Задание 3. Масштабирование и self-healing.**
+```bash
+kubectl scale deployment web --replicas=5
+kubectl delete pod <name>                  # ReplicaSet создаст новый
+kubectl get pods -w
+```
+
+**Задание 4. YAML-манифесты.**
+```bash
+kubectl get deployment web -o yaml > web.yaml
+kubectl apply -f web.yaml
+kubectl get all
+```
+
+**Задание 5. Rolling update и rollback.**
+```bash
+kubectl set image deployment/web nginx=nginx:1.25-alpine
+kubectl rollout status deployment/web
+kubectl rollout undo deployment/web
+kubectl rollout history deployment/web
+```
+
+**Задание 6. ConfigMap и Secret.**
+```bash
+kubectl create configmap nginx-conf --from-file=nginx.conf
+kubectl create secret generic db-pass --from-literal=password=s3cr3t
+kubectl describe configmap nginx-conf
+kubectl describe secret db-pass
+```
+
+**Задание 7. Постоянное хранилище.**
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: data }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 1Gi } }
+```
+```bash
+kubectl apply -f pvc.yaml
+kubectl get pvc
+```
+
+**Задание 8. Ограничения ресурсов.**
+```bash
+kubectl set resources deployment web --limits=cpu=200m,memory=128Mi
+kubectl describe deployment web | grep -A3 Limits
+```
+
+**Задание 9. Namespace и квоты.**
+```bash
+kubectl create namespace test
+kubectl run nginx2 --image=nginx:alpine -n test
+kubectl get pods -n test
+```
+
+**Задание 10. Очистка.**
+```bash
+kubectl delete deployment web
+kubectl delete svc web
+kubectl delete namespace test
+```
