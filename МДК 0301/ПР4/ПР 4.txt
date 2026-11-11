@@ -1,0 +1,86 @@
+Наименование дисцилины:МДК 03.01 АДМИНИСТРИРОВАНИЕ СРЕД И ПЛАТФОРМ РАЗРАБОТКИ ИНФОРМАЦИОННЫХ РЕСУРСОВ
+
+Наименование практики: Настройка контейнеризированного веб-сервера с пробросом портов и монтированием томов
+
+ЦЕЛЬ РАБОТЫ
+Изучить основы Docker Compose,
+описать конфигурацию многосервисного приложения и выполнить его запуск.
+
+ХОД РАБОТЫ
+
+Задание 1. nginx + webapp.
+    ```yaml
+    services:
+    web: { image: webapp:1.0, expose: ["80"] }
+    proxy:
+        image: nginx:alpine
+        ports: ["80:80"]
+        volumes: ["./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro"]
+        depends_on: [web]
+    ```
+    `default.conf`: `location / { proxy_pass http://web:80; }`
+    ```bash
+    docker compose up -d && curl localhost
+    ```
+
+Задание 2. web + PostgreSQL + Redis + nginx.
+    Приложение на Node.js с `pg` и `redis`. Compose:
+    ```yaml
+    services:
+    app:
+        build: ./app
+        environment: {DB_HOST: db, REDIS_HOST: cache, DB_PASSWORD: ${DB_PASSWORD}}
+        depends_on:
+        db: {condition: service_healthy}
+    db:
+        image: postgres:15-alpine
+        environment: {POSTGRES_PASSWORD: ${DB_PASSWORD}, POSTGRES_USER: app, POSTGRES_DB: appdb}
+        volumes: [pgdata:/var/lib/postgresql/data]
+        healthcheck:
+        test: ["CMD-SHELL","pg_isready -U app"]
+        interval: 5s
+    cache: { image: redis:7-alpine, volumes: [redisdata:/data] }
+    web:
+        image: nginx:alpine
+        ports: ["8080:80"]
+        volumes: ["./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro"]
+    volumes: { pgdata: {}, redisdata: {} }
+    ```
+    ```bash
+    echo "DB_PASSWORD=Secret123" > .env
+    docker compose up -d --build && curl localhost:8080
+    ```
+
+Задание 3. .env.
+    `docker compose config` — проверка подстановки. `docker compose --env-file .env.prod config`.
+
+Задание 4. Override + профили
+    `docker-compose.override.yml` — dev-режим (volume кода). В `docker-compose.tools.yml` сервис `adminer` с `profiles: [tools]`.
+    ```bash
+    docker compose up -d                     # без adminer
+    docker compose --profile tools up -d     # с adminer
+    ```
+
+Задание 5. Масштабирование.
+    ```bash
+    docker compose up -d --scale app=3
+    for i in $(seq 10); do curl -s localhost:8080 | grep host; done
+    ```
+
+Задание 6. Жизненный цикл
+    ```bash
+    docker compose ps / top / logs -f app
+    docker compose restart app
+    docker compose up -d --force-recreate
+    docker compose down       # тома сохраняются
+    docker compose down -v    # тома удаляются
+    ```
+
+Задание 7. Отладка
+    `docker compose config`, проверить конфликт портов, циклические depends_on,
+    `docker compose ps` (healthy/unhealthy).
+
+Контрольные вопросы
+    Какова базовая структура и назначение файла docker-compose.yml?
+    Какие команды используются для запуска, остановки и полного удаления сервисов, описанных в compose-файле?
+    Как по умолчанию организуется сетевое взаимодействие между сервисами внутри одного compose-проекта?

@@ -1,0 +1,81 @@
+Наименование дисцилины:МДК 03.01 АДМИНИСТРИРОВАНИЕ СРЕД И ПЛАТФОРМ РАЗРАБОТКИ ИНФОРМАЦИОННЫХ РЕСУРСОВ
+
+Наименование практики: Работа с Docker-образами: создание собственного образа с веб-приложением
+
+ЦЕЛЬ РАБОТЫ
+Изучить структуру Docker-образов, написать Dockerfile,
+собрать и запустить собственный образ с веб-приложением.
+
+ХОД РАБОТЫ
+
+Задание 1. Приложение.
+    В `/opt/webapp/site`: `index.html`, `about.html`, `style.css`, `app.js`.
+
+Задание 2. Dockerfile
+
+    FROM nginx:alpine
+    LABEL maintainer="student@example.com"
+    COPY ./site /usr/share/nginx/html
+    EXPOSE 80
+    HEALTHCHECK CMD wget -qO- http://localhost/ || exit 1
+
+
+    docker build -t webapp:1.0 .
+    docker run -d --name w1 -p 8080:80 webapp:1.0
+    curl localhost:8080
+    docker inspect w1 --format='{{.State.Health.Status}}'
+
+Задание 3..dockerignore + кэш.
+    Файл `.dockerignore`: `.git`, `*.log`, `README.md`.
+    Пересобрать, сравнить `docker history webapp:1.0`.
+
+Задание 4. Multi-stage (Node.js).
+
+    FROM node:18-alpine AS builder
+    WORKDIR /app
+    COPY package*.json ./
+    RUN npm install --production
+    COPY . .
+    FROM node:18-alpine
+    WORKDIR /app
+    COPY --from=builder /app .
+    CMD ["node","server.js"]
+
+
+    docker build -t nodeapp:multi . && docker run -d -p 3000:3000 nodeapp:multi
+
+
+Задание 5. ARG/ENV/ENTRYPOINT.
+
+    ARG BUILD_VERSION=dev
+    ENV APP_VERSION=$BUILD_VERSION
+    COPY entrypoint.sh /entrypoint.sh
+    RUN chmod +x /entrypoint.sh
+    ENTRYPOINT ["/entrypoint.sh"]
+    CMD ["node","server.js"]
+
+    `entrypoint.sh`: `echo "ver=$APP_VERSION"; exec "$@"`
+
+    docker build --build-arg BUILD_VERSION=2.5 -t nodeapp:2.5 .
+    docker run --rm -e APP_MODE=prod nodeapp:2.5 env | grep APP
+
+
+Задание 6. Теги и локальный реестр
+
+    docker tag webapp:1.0 webapp:latest
+    docker run -d -p 5000:5000 --name registry registry:2
+    # добавить "insecure-registries":["localhost:5000"] в daemon.json, restart docker
+    docker tag webapp:1.0 localhost:5000/webapp:1.0
+    docker push localhost:5000/webapp:1.0
+    docker rmi localhost:5000/webapp:1.0 && docker pull localhost:5000/webapp:1.0
+    docker save webapp:1.0 -o w.tar && docker load -i w.tar
+
+Задание 7. Анализ.
+`docker history webapp:1.0`, `docker image inspect`.
+Способы уменьшения: alpine-база, multi-stage, чистка кэша,
+.dockerignore, без dev-зависимостей.
+
+Контрольные вопросы
+    Что такое Dockerfile и для чего нужны основные инструкции в нем (FROM, RUN, CMD, COPY)?
+    Как собрать собственный образ из Dockerfile и задать ему имя и тег?
+    В чем принципиальная разница между образом (image) и контейнером (container)?

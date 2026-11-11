@@ -1,0 +1,97 @@
+Наименование дисцилины:МДК 03.01 АДМИНИСТРИРОВАНИЕ СРЕД И ПЛАТФОРМ РАЗРАБОТКИ ИНФОРМАЦИОННЫХ РЕСУРСОВ
+
+Наименование практики: Настройка контейнеризированного веб-сервера с пробросом портов и монтированием томов
+
+ЦЕЛЬ РАБОТЫ
+Изучить механизмы сети и хранения данных в Docker,
+настроить проброс портов и монтирование томов для веб-сервера.
+
+ХОД РАБОТЫ
+
+Задание 1. Порты
+
+    docker run -d --name p1 -p 8080:80 nginx:alpine
+    docker run -d --name p3 -p 127.0.0.1:8082:80 nginx:alpine
+    docker run -d --name p4 -p 9000-9010:80 nginx:alpine
+    docker run -d --name p5 -P nginx:alpine && docker port p5
+    ss -tlnp | grep -E '8080|8082|900'
+
+Задание 2. Bind mounts
+
+    docker run -d --name b1 -p 8080:80 -v /opt/site:/usr/share/nginx/html:ro nginx:alpine
+    echo "<h1>new</h1>" > /opt/site/index.html   # сразу видно
+    docker run -d -v /opt/nginx.conf:/etc/nginx/conf.d/default.conf:ro nginx:alpine
+    docker run -d -v /opt/logs:/var/log/nginx nginx:alpine
+    docker inspect b1 --format='{{json .Mounts}}'
+
+Задание 3. Named volumes
+
+    docker volume create appdata
+    docker run -d --name v1 -v appdata:/data alpine sh -c "sleep 3600"
+    docker exec v1 sh -c "echo hi > /data/f"
+    docker rm -f v1
+    docker run --rm -v appdata:/data alpine cat /data/f
+    docker volume inspect appdata
+
+Задание 4. UID/GID
+
+    chmod 700 /opt/protected       # Permission denied у nginx
+    chmod 755 /opt/protected       # исправление
+    docker run --rm --user 1000:1000 alpine id
+
+Задание 5. tmpfs
+
+    docker run -d --name t --tmpfs /tmp:rw,size=64m nginx:alpine
+    docker exec t sh -c "echo x > /tmp/f && cat /tmp/f"
+    docker rm -f t                 # данные /tmp исчезли
+
+    В compose:
+
+    volumes: ["./site:/usr/share/nginx/html:ro"]
+    tmpfs: ["/tmp:size=64m"]
+
+Задание 6. Комплексный веб-сервис с HTTPS
+
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+    -keyout /opt/practice5/key.pem -out /opt/practice5/cert.pem \
+    -subj "/CN=localhost"
+
+    В compose: bind статики (`:ro`), named volume для загрузок, bind логов, tmpfs для `/tmp`, порт `8443:443`, конфиг nginx с `ssl_certificate`.
+
+    curl -k https://localhost:8443
+
+
+Задание 7. Диагностика монтирований
+
+    # -v создаёт путь автоматически
+    docker run --rm -v /no/such/dir:/data alpine ls /data
+    # --mount требует существования
+    docker run --rm --mount type=bind,src=/no/such/dir,dst=/data alpine ls /data
+    docker inspect b1 --format='{{json .Mounts}}'
+
+
+Задание 8. Сравнение драйверов логирования через volume
+
+    docker run -d --name logtest -v /opt/logs:/var/log/nginx nginx:alpine
+    curl -s localhost:8080 >/dev/null
+    ls -l /opt/logs/
+
+
+Задание 9. Volume из другого контейнера (`--volumes-from`)
+
+    docker run -d --name src -v appdata:/data alpine sh -c "echo shared > /data/s && sleep 3600"
+    docker run --rm --volumes-from src alpine cat /data/s
+
+
+Задание 10. Ограничение доступа через read-only rootfs
+
+    docker run -d --name ro --read-only --tmpfs /var/cache/nginx --tmpfs /var/run \
+    -p 8086:80 nginx:alpine
+    curl localhost:8086
+    docker exec ro sh -c "touch /test" || echo "rootfs только для чтения"
+
+
+Контрольные вопросы
+    Как работает проброс портов в Docker (флаг -p или секция ports) и зачем он нужен?
+    Какие существуют типы хранения данных в Docker (volumes, bind mounts) и в чем их ключевые отличия?
+    Как проверить, что данные сохраняются при удалении и повторном создании контейнера?

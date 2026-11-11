@@ -1,0 +1,56 @@
+Наименование дисцилины:МДК 03.01 АДМИНИСТРИРОВАНИЕ СРЕД И ПЛАТФОРМ РАЗРАБОТКИ ИНФОРМАЦИОННЫХ РЕСУРСОВ
+
+Наименование практики: Управление контейнерами: создание, остановка, удаление, просмотр логов
+
+ЦЕЛЬ РАБОТЫ
+Изучить жизненный цикл контейнеров Docker, освоить их создание,
+остановку, удаление и просмотр логов.
+
+ХОД РАБОТЫ
+
+Задание 1. Жизненный цикл
+
+    docker run -it --name c1 alpine sh        # Ctrl+P,Ctrl+Q — выход без остановки
+    docker attach c1                          # выход = остановка
+    docker start c1 && docker exec -it c1 sh  # выход не останавливает
+    docker create --name c2 alpine echo hi
+    docker start c2 && docker logs c2 && docker stop c2 && docker rm c2
+
+Задание 2. Логи
+
+    docker run -d --name web1 -p 8080:80 nginx:alpine
+    for i in $(seq 10); do curl -s localhost:8080 >/dev/null; done
+    docker logs --tail 5 -t web1
+    docker logs -f web1
+
+Ограничение логов — `/etc/docker/daemon.json`: `{"log-driver":"json-file","log-opts":{"max-size":"10m","max-file":"3"}}`, затем `systemctl restart docker`.
+
+Задание 3. Ресурсы
+
+    docker run -d --name lim --cpus="0.5" -m 128m nginx:alpine
+    docker stats --no-stream
+    docker inspect lim --format='{{.HostConfig.Memory}} {{.HostConfig.NanoCpus}}'
+
+Задание 4. Restart-политики
+
+    docker run -d --name f --restart on-failure:3 alpine sh -c "sleep 5; exit 1"
+    docker inspect f --format='{{.RestartCount}}'
+    docker run -d --name a --restart always nginx:alpine
+    docker kill a && sleep 3 && docker ps --filter name=a
+
+Задание 5. Очистка
+
+    docker stop $(docker ps -q)
+    docker container prune -f && docker image prune -f
+    docker system df && docker system prune -a --volumes -f && docker system df
+
+Задание 6. Диагностика
+
+    docker run -d --name b alpine sh -c "sleep 2; exit 127"
+    docker logs b
+    docker inspect b --format='{{.State.ExitCode}} {{.State.Error}}'
+
+Контрольные вопросы
+    Какие основные команды используются для создания, запуска, остановки и удаления контейнера?
+    Как просмотреть логи работающего и уже остановленного контейнера?
+    В чем разница между состояниями контейнера (created, running, exited)?

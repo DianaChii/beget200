@@ -1,0 +1,50 @@
+Наименование дисцилины:МДК 03.01 АДМИНИСТРИРОВАНИЕ СРЕД И ПЛАТФОРМ РАЗРАБОТКИ ИНФОРМАЦИОННЫХ РЕСУРСОВ
+
+Наименование практики: Установка docker и запуск контейнера
+
+ЦЕЛЬ РАБОТЫ
+Изучить принципы работы с контейнерами Docker, настроить доступ в интернет через прокси-сервер, установить Docker и Docker Compose, подключить корневой сертификат и запустить тестовый контейнер.
+
+ХОД РАБОТЫ
+
+1. Для начала, по пути /etc/sysconfig в файле network был задан прокси.
+    HTTP_PROXY= http://10.0.42.52:3128
+    HTTPS_PROXY= http://10.0.42.52:3128
+    FTP_PROXY= http://10.0.42.52:3128
+2. Следующим же шагом было настроено прокси по пути /etc/apt в файле apt.conf.
+    Acquire::http::proxy "http://10.0.42.52:3128";
+    Acquire::https::proxy "http://10.0.42.52:3128";
+3. Третьим шагом сделано обновление репозиториев, затем устанавливаем Docker и Docker-compose.
+    apt-get update
+    apt-get install docker-engine docker-compose
+4. Далее был скачиваем сертификат ЕСПД и копируем в хранилище, после чего - обновляем.
+Далее добавляем сертификат в директорию Docker.
+    wget https://espd.wifi.rt.ru/docs/ca-root.crt
+    cp ca-root.crt /etc/pki/ca-trust/source/anchors/
+    update-ca-trust
+    ls -ls /etc/pki/ca-trust/source/anchors/
+    mkdir -p /etc/docker/certs.d/registry-1.docker.io
+    mkdir -p /etc/docker/certs.d/auth.docker.io
+    cp ca-root.crt /etc/docker/certs.d/registry-1.docker.io/ca.crt
+    cp ca-root.crt /etc/docker/certs.d/auth.docker.io/ca.crt
+    ls -la /etc/docker/certs.d/registry-1.docker.io
+5. Для Docker создан файл «http-proxy.conf» по пути /etc/system/system/docker.service.d/,
+после устанавливаем прокси.
+    Environment="HTTP_PROXY=http://10.0.42.52:3128"
+    Environment="HTTPS_PROXY=http://10.0.42.52:3128"
+    Environment="NO_PROXY=localhost,127.0.0.1,172.18.0.0/16"
+    Environment="DOCKER_CLIENT_TIMEOUT=600"
+    Environment="COMPOSE_HTTP_TIMEOUT=600"
+6. Финальным шагом была проведена проверка Docker.
+    systemctl daemon-reload
+    systemctl restart docker
+    docker pull hello-world
+    docker run hello-world
+
+
+Контрольные вопросы
+    Что такое образ (Image) и чем он отличается от контейнера?
+    Что делает команда docker run -d -p 8080:80 nginx? Расшифруйте каждый элемент.
+    Для чего используется флаг -it в команде docker run -it ubuntu?
+    Какие инструкции используются в Dockerfile и что каждая из них делает?
+    Как сохранить данные между перезапусками контейнера и как передать в контейнер переменные окружения? Приведите примеры команд.
